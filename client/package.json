@@ -1,0 +1,50 @@
+{
+  "name": "kumaran-travels-client",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "cap:add": "npx cap add android",
+    "cap:sync": "npx cap sync",
+    "cap:copy": "npx cap copy",
+    "cap:open": "npx cap open android",
+    "build:apk": "vite build && npx cap copy && npx cap sync",
+    "build:apk:prod": "VITE_API_URL=http://localhost:3001 vite build && npx cap copy && npx cap sync"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.3.4",
+    "axios": "^1.7.9",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
+    "leaflet": "^1.9.4",
+    "leaflet-routing-machine": "^3.2.12",
+    "react": "^18.3.1",
+    "react-calendar": "^5.1.0",
+    "react-dom": "^18.3.1",
+    "react-icons": "^5.4.0",
+    "react-leaflet": "^4.2.1",
+    "react-router-dom": "^6.28.0",
+    "react-toastify": "^10.0.6",
+    "recharts": "^3.8.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.3.4",
+    "@types/leaflet": "^1.9.14",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "jsdom": "^29.1.1",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.15",
+    "vite": "^6.0.1",
+    "vite-plugin-pwa": "^1.3.0",
+    "vitest": "^4.1.7"
+  }
+}

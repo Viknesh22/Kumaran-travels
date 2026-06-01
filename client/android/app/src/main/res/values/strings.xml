@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">KumaranTravels</string>
+    <string name="title_activity_main">KumaranTravels</string>
+    <string name="package_name">com.kumarantravels.app</string>
+    <string name="custom_url_scheme">com.kumarantravels.app</string>
+</resources>

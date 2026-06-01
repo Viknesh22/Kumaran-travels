@@ -1,0 +1,130 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Leaflet map height fix */
+.leaflet-container {
+  height: 100%;
+  width: 100%;
+  border-radius: 0.75rem;
+  z-index: 0;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(-20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes pulse-dot {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.5); opacity: 0.5; }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-out;
+}
+
+.animate-slideIn {
+  animation: slideIn 0.3s ease-out;
+}
+
+/* Glass effect */
+.glass {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+/* Trip status badges */
+.status-badge {
+  @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+}
+.status-planned {
+  @apply bg-blue-100 text-blue-800;
+}
+.status-ongoing {
+  @apply bg-green-100 text-green-800;
+}
+.status-completed {
+  @apply bg-gray-100 text-gray-800;
+}
+.status-cancelled {
+  @apply bg-red-100 text-red-800;
+}
+
+/* Card hover effect */
+.card-hover {
+  @apply transition-all duration-200;
+}
+.card-hover:hover {
+  @apply shadow-lg -translate-y-0.5;
+}
+
+/* Input styles */
+.input-field {
+  @apply w-full px-3 py-2 border border-gray-300 rounded-lg text-sm
+    focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500
+    transition-colors duration-150;
+}
+
+.btn-primary {
+  @apply inline-flex items-center justify-center px-4 py-2.5 bg-primary-600 text-white
+    font-medium text-sm rounded-lg hover:bg-primary-700 focus:outline-none focus:ring-2
+    focus:ring-offset-2 focus:ring-primary-500 transition-colors duration-150
+    disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+.btn-secondary {
+  @apply inline-flex items-center justify-center px-4 py-2.5 bg-white text-gray-700
+    font-medium text-sm rounded-lg border border-gray-300 hover:bg-gray-50
+    focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500
+    transition-colors duration-150;
+}
+
+.btn-danger {
+  @apply inline-flex items-center justify-center px-4 py-2.5 bg-red-600 text-white
+    font-medium text-sm rounded-lg hover:bg-red-700 focus:outline-none focus:ring-2
+    focus:ring-offset-2 focus:ring-red-500 transition-colors duration-150;
+}
+
+.btn-success {
+  @apply inline-flex items-center justify-center px-4 py-2.5 bg-green-600 text-white
+    font-medium text-sm rounded-lg hover:bg-green-700 focus:outline-none focus:ring-2
+    focus:ring-offset-2 focus:ring-green-500 transition-colors duration-150;
+}
