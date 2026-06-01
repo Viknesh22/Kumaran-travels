@@ -1,122 +1,154 @@
-const { createClient } = require('@libsql/client');
-const path = require('path');
-
-const DB_PATH = path.join(__dirname, 'kumaran_travels.db');
+const { Pool } = require('pg');
 
 let db = null;
 
-// Wrapper to make @libsql/client API similar to the previous sql.js / better-sqlite3 pattern
+// Convert ? placeholders to $1, $2, ... for PostgreSQL
+function convertPlaceholders(sql) {
+  let idx = 0;
+  return sql.replace(/\?/g, () => `$${++idx}`);
+}
+
+// Detect if SQL is an INSERT (to auto-append RETURNING id for lastInsertRowid)
+function isInsertQuery(sql) {
+  return /^\s*INSERT\s/i.test(sql);
+}
+
 class Statement {
-  constructor(client, sql) {
-    this.client = client;
-    this.sql = sql;
+  constructor(database, originalSql) {
+    this.db = database;
+    this.originalSql = originalSql;
+    this.pgSql = convertPlaceholders(originalSql);
+    this.inserting = isInsertQuery(originalSql);
   }
 
   async get(...params) {
-    const result = await this.client.execute({
-      sql: this.sql,
-      args: params.length > 0 ? params : undefined,
-    });
+    const sql = this.inserting ? `${this.pgSql} RETURNING *` : this.pgSql;
+    const cleanParams = params.map(p => (p === undefined ? null : p));
+    const result = await this.db._query(sql, cleanParams);
     return result.rows[0] || undefined;
   }
 
   async all(...params) {
-    const result = await this.client.execute({
-      sql: this.sql,
-      args: params.length > 0 ? params : undefined,
-    });
+    const cleanParams = params.map(p => (p === undefined ? null : p));
+    const result = await this.db._query(this.pgSql, cleanParams);
     return result.rows;
   }
 
   async run(...params) {
-    const result = await this.client.execute({
-      sql: this.sql,
-      args: params.length > 0 ? params : undefined,
-    });
+    const cleanParams = params.map(p => (p === undefined ? null : p));
+    if (this.inserting) {
+      const result = await this.db._query(`${this.pgSql} RETURNING id`, cleanParams);
+      return {
+        lastInsertRowid: result.rows[0]?.id || 0,
+        changes: result.rowCount,
+      };
+    }
+    const result = await this.db._query(this.pgSql, cleanParams);
     return {
-      lastInsertRowid: Number(result.lastInsertRowid || 0),
-      changes: result.rowsAffected || 0,
+      lastInsertRowid: 0,
+      changes: result.rowCount,
     };
   }
 }
 
 class Database {
-  constructor(client) {
-    this.client = client;
+  constructor(pool) {
+    this.pool = pool;
+    this._txClient = null;
+  }
+
+  _getClient() {
+    return this._txClient || this.pool;
+  }
+
+  async _query(sql, params) {
+    const client = this._getClient();
+    return client.query(sql, params);
   }
 
   prepare(sql) {
-    return new Statement(this.client, sql);
+    return new Statement(this, sql);
   }
 
   async exec(sql) {
-    await this.client.execute(sql);
+    await this._query(sql);
   }
 
   transaction(fn) {
     return async (...args) => {
-      await this.client.execute('BEGIN');
+      const client = await this.pool.connect();
       try {
-        const result = await fn(...args);
-        await this.client.execute('COMMIT');
-        return result;
+        await client.query('BEGIN');
+        const prevClient = this._txClient;
+        this._txClient = client;
+        try {
+          const result = await fn(...args);
+          await client.query('COMMIT');
+          return result;
+        } finally {
+          this._txClient = prevClient;
+        }
       } catch (err) {
-        await this.client.execute('ROLLBACK');
+        await client.query('ROLLBACK');
         throw err;
+      } finally {
+        client.release();
       }
     };
   }
 
   async close() {
-    // @libsql/client doesn't need explicit close for local mode
+    await this.pool.end();
   }
 }
 
-function createTursoClient() {
-  const url = process.env.TURSO_DATABASE_URL;
-  const authToken = process.env.TURSO_AUTH_TOKEN;
-
+function createPool() {
+  const url = process.env.DATABASE_URL || process.env.SUPABASE_DB_URL;
   if (url) {
-    // Remote Turso database
-    return createClient({ url, authToken });
+    const isRemote = !url.includes('localhost') && !url.includes('127.0.0.1');
+    return new Pool({
+      connectionString: url,
+      ssl: isRemote ? { rejectUnauthorized: false } : false,
+    });
   }
-
-  // Local SQLite file (development mode)
-  // @libsql/client on Windows requires forward slashes in the file: URL
-  // Format: file:C:/path/to/db (NOT file:///C:/...)
-  const normalizedPath = DB_PATH.replace(/\\/g, '/');
-  return createClient({ url: `file:${normalizedPath}` });
+  // Local PostgreSQL fallback
+  return new Pool({
+    host: process.env.DB_HOST || 'localhost',
+    port: parseInt(process.env.DB_PORT || '5432'),
+    database: process.env.DB_NAME || 'kumaran_travels',
+    user: process.env.DB_USER || 'postgres',
+    password: process.env.DB_PASS || '',
+  });
 }
 
 async function initTables() {
   const tables = [
     `CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       name TEXT NOT NULL,
       email TEXT UNIQUE NOT NULL,
       password TEXT NOT NULL,
       phone TEXT,
       role TEXT NOT NULL CHECK(role IN ('owner', 'partner', 'driver')),
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )`,
     `CREATE TABLE IF NOT EXISTS vehicles (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       registration_number TEXT UNIQUE NOT NULL,
       vehicle_name TEXT NOT NULL,
-      owner_id INTEGER NOT NULL,
+      owner_id INTEGER NOT NULL REFERENCES users(id),
       capacity INTEGER DEFAULT 12,
       mileage_kmpl REAL DEFAULT 0,
       is_active INTEGER DEFAULT 1,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (owner_id) REFERENCES users(id)
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )`,
     `CREATE TABLE IF NOT EXISTS trips (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       title TEXT NOT NULL,
-      vehicle_id INTEGER NOT NULL,
-      driver_id INTEGER,
-      partner_id INTEGER,
+      vehicle_id INTEGER NOT NULL REFERENCES vehicles(id),
+      driver_id INTEGER REFERENCES users(id),
+      partner_id INTEGER REFERENCES users(id),
       start_date DATE NOT NULL,
       end_date DATE NOT NULL,
       status TEXT DEFAULT 'planned' CHECK(status IN ('planned', 'ongoing', 'completed', 'cancelled')),
@@ -132,85 +164,72 @@ async function initTables() {
       start_location TEXT,
       end_location TEXT,
       notes TEXT,
-      created_by INTEGER,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (vehicle_id) REFERENCES vehicles(id),
-      FOREIGN KEY (driver_id) REFERENCES users(id),
-      FOREIGN KEY (partner_id) REFERENCES users(id),
-      FOREIGN KEY (created_by) REFERENCES users(id)
+      created_by INTEGER REFERENCES users(id),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )`,
     `CREATE TABLE IF NOT EXISTS trip_stops (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      trip_id INTEGER NOT NULL,
+      id SERIAL PRIMARY KEY,
+      trip_id INTEGER NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
       place_name TEXT NOT NULL,
       latitude REAL,
       longitude REAL,
       stop_order INTEGER NOT NULL,
       stop_type TEXT DEFAULT 'stop' CHECK(stop_type IN ('start', 'stop', 'end')),
       is_return_trip INTEGER DEFAULT 0,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )`,
     `CREATE TABLE IF NOT EXISTS trip_expenses (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      trip_id INTEGER NOT NULL,
+      id SERIAL PRIMARY KEY,
+      trip_id INTEGER NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
       expense_type TEXT NOT NULL CHECK(expense_type IN ('diesel', 'parking', 'toll', 'maintenance', 'food', 'other')),
       amount REAL NOT NULL,
       liters REAL,
       description TEXT,
       receipt_url TEXT,
-      paid_by INTEGER,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE,
-      FOREIGN KEY (paid_by) REFERENCES users(id)
+      paid_by INTEGER REFERENCES users(id),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )`,
     `CREATE TABLE IF NOT EXISTS payments (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      trip_id INTEGER NOT NULL,
+      id SERIAL PRIMARY KEY,
+      trip_id INTEGER NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
       payer_type TEXT NOT NULL CHECK(payer_type IN ('customer', 'driver', 'partner')),
       amount REAL NOT NULL,
       payment_type TEXT NOT NULL CHECK(payment_type IN ('advance', 'balance', 'diesel_refill', 'other')),
       description TEXT,
-      received_by INTEGER,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE,
-      FOREIGN KEY (received_by) REFERENCES users(id)
+      received_by INTEGER REFERENCES users(id),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )`,
     `CREATE TABLE IF NOT EXISTS maintenance_logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      vehicle_id INTEGER NOT NULL,
+      id SERIAL PRIMARY KEY,
+      vehicle_id INTEGER NOT NULL REFERENCES vehicles(id),
       description TEXT NOT NULL,
       cost REAL NOT NULL,
       maintenance_date DATE NOT NULL,
       next_maintenance_km INTEGER,
       current_km_reading INTEGER,
-      created_by INTEGER,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (vehicle_id) REFERENCES vehicles(id),
-      FOREIGN KEY (created_by) REFERENCES users(id)
+      created_by INTEGER REFERENCES users(id),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )`,
     `CREATE TABLE IF NOT EXISTS diesel_refills (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      trip_id INTEGER NOT NULL,
+      id SERIAL PRIMARY KEY,
+      trip_id INTEGER NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
       liters REAL NOT NULL,
       amount REAL NOT NULL,
       rate_per_liter REAL,
-      filled_by INTEGER,
+      filled_by INTEGER REFERENCES users(id),
       filled_by_name TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE,
-      FOREIGN KEY (filled_by) REFERENCES users(id)
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )`,
     `CREATE TABLE IF NOT EXISTS notification_settings (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       setting_key TEXT UNIQUE NOT NULL,
       setting_value TEXT,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )`,
     `CREATE TABLE IF NOT EXISTS notifications_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      trip_id INTEGER,
+      id SERIAL PRIMARY KEY,
+      trip_id INTEGER REFERENCES trips(id) ON DELETE SET NULL,
       recipient_type TEXT NOT NULL CHECK(recipient_type IN ('driver', 'partner', 'owner', 'customer')),
       recipient_email TEXT NOT NULL,
       notification_type TEXT NOT NULL CHECK(notification_type IN ('trip_confirmation', 'trip_reminder', 'payment_receipt', 'test')),
@@ -218,8 +237,7 @@ async function initTables() {
       body TEXT,
       status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'sent', 'failed')),
       error_message TEXT,
-      sent_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE SET NULL
+      sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )`,
   ];
 
@@ -232,13 +250,13 @@ async function initTables() {
     await db.exec('CREATE INDEX IF NOT EXISTS idx_trips_dates ON trips(start_date, end_date)');
     await db.exec('CREATE INDEX IF NOT EXISTS idx_trips_vehicle ON trips(vehicle_id)');
     await db.exec('CREATE INDEX IF NOT EXISTS idx_trips_status ON trips(status)');
-  } catch (e) { /* ignore if already exist */ }
+  } catch (e) { /* indexes may already exist */ }
 
-  // Add columns that might be missing from existing databases
+  // Add columns that might be missing (safe to ignore errors)
   const addColumnIfMissing = async (table, column, def) => {
     try {
-      await db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${def}`);
-    } catch (e) { /* column already exists */ }
+      await db.exec(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${column} ${def}`);
+    } catch (e) { /* column already exists or ALTER not supported */ }
   };
 
   await addColumnIfMissing('vehicles', 'mileage_kmpl', 'REAL DEFAULT 0');
@@ -252,7 +270,7 @@ async function initTables() {
   await addColumnIfMissing('trips', 'pending_amount', 'REAL DEFAULT 0');
   await addColumnIfMissing('trips', 'pending_amount_collected', 'REAL DEFAULT 0');
   await addColumnIfMissing('trips', 'pending_collected_by', 'INTEGER');
-  await addColumnIfMissing('trips', 'pending_collected_at', 'DATETIME');
+  await addColumnIfMissing('trips', 'pending_collected_at', 'TIMESTAMP');
 }
 
 let initPromise = null;
@@ -261,10 +279,9 @@ function initDb() {
   if (initPromise) return initPromise;
 
   initPromise = (async () => {
-    const client = createTursoClient();
-    db = new Database(client);
+    const pool = createPool();
+    db = new Database(pool);
 
-    await db.exec('PRAGMA foreign_keys = ON');
     await initTables();
 
     return db;
