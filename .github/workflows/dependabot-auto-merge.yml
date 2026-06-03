@@ -1,0 +1,67 @@
+name: Dependabot Auto-Merge
+
+on: pull_request
+
+permissions:
+  contents: read
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    if: ${{ github.actor == 'dependabot[bot]' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Fetch all branches
+        run: git fetch --no-tags --prune --depth=1 origin master main
+
+      - name: Wait for CI checks to pass
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const prNumber = context.payload.pull_request.number;
+
+            // Wait up to 30 minutes for checks to pass
+            const maxWaitMinutes = 30;
+            const checkIntervalMs = 60000; // Check every minute
+
+            for (let i = 0; i < maxWaitMinutes; i++) {
+              const { data: checks } = await github.rest.checks.listForRef({
+                owner,
+                repo,
+                ref: context.payload.pull_request.head.sha,
+              });
+
+              const allChecksPassed = checks.check_runs.every(
+                check => check.conclusion === 'success'
+              );
+              const allChecksCompleted = checks.check_runs.every(
+                check => check.conclusion !== null
+              );
+
+              if (allChecksPassed) {
+                console.log('All checks passed!');
+                return true;
+              }
+
+              if (allChecksCompleted && !allChecksPassed) {
+                console.log('Checks completed but some failed');
+                return false;
+              }
+
+              console.log(`Waiting for checks to complete... (${i + 1}/${maxWaitMinutes} minutes)`);
+              await new Promise(resolve => setTimeout(resolve, checkIntervalMs));
+            }
+
+            console.log('Timeout waiting for checks');
+            return false;
+
+      - name: Enable auto-merge
+        if: success()
+        run: |
+          gh pr merge --auto --squash --delete-branch ${{ github.event.pull_request.number }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
