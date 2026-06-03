@@ -11,8 +11,6 @@ services:
         value: production
       - key: PORT
         value: "3001"
-      # Set DATABASE_URL in the Render dashboard to your PostgreSQL connection string
-      # (from Render's PostgreSQL add-on, Supabase, Neon, etc.)
       - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET
